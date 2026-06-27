@@ -21,7 +21,7 @@ spec:
     spec:
       containers:
         - name: demo-api
-          image: carlcuevas/demo-api:latest
+          image: ttzeta00/demo-api:latest
           ports:
             - containerPort: 3000
           readinessProbe:

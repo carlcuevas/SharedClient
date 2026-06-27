@@ -37,9 +37,9 @@ jobs:
       - name: Build y push imagen
         run: |
           IMAGE_TAG=${GITHUB_REF_NAME:-latest}
-          docker build -t carlcuevas/demo-api:$IMAGE_TAG -t carlcuevas/demo-api:latest .
-          docker push carlcuevas/demo-api:$IMAGE_TAG
-          docker push carlcuevas/demo-api:latest
+          docker build -t ttzeta00/demo-api:$IMAGE_TAG -t ttzeta00/demo-api:latest .
+          docker push ttzeta00/demo-api:$IMAGE_TAG
+          docker push ttzeta00/demo-api:latest
 
   deploy:
     name: Deploy a K3s
