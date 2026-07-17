@@ -1,0 +1,22 @@
+=== EVIDENCIA: Auto-healing en vivo sobre EKS ===
+Fecha: 2026-07-17 17:51
+
+Estado previo: orders-blue forzado a CrashLoopBackOff (imagen alpine:latest)
+único pod activo en blue, sin réplicas sanas de respaldo.
+
+Log del watchdog:
+[2026-07-17 17:51:47] FALLA #1 - código: 000
+[2026-07-17 17:51:52] FALLA #2 - código: 000
+[2026-07-17 17:51:57] FALLA #3 - código: 000
+[2026-07-17 17:51:57] >>> UMBRAL ALCANZADO. Ejecutando rollback automático...
+[2026-07-17 17:51:57] Color activo con falla: blue -> Rollback a: green
+service/orders-public patched
+[2026-07-17 17:51:57] Rollback ejecutado. Reiniciando contador de fallas.
+
+Verificación post-rollback:
+- Selector del Service: green
+- curl al endpoint /health: HTTP 200
+
+Conclusión: el sistema detectó la falla real, ejecutó diagnóstico automático
+(3 fallas consecutivas / umbral configurado), y aplicó remediación (kubectl patch
+del selector) sin intervención manual, restaurando el servicio en ~10 segundos.

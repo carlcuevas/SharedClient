@@ -1,80 +1,68 @@
-#!/usr/bin/env bash
-# watchdog-auto-rollback.sh
-#
-# Este es el script que corres EN VIVO durante la defensa ("Prueba de Fuego").
-# Monitorea continuamente la variante activa de orders-public. Si detecta
-# fallas consecutivas (HTTP != 200, o pods en CrashLoopBackOff/Error),
-# revierte automáticamente el tráfico a la variante anterior estable
-# (que sigue corriendo en paralelo, sin tráfico) mediante "kubectl patch".
-#
-# No requiere que se vuelva a correr el pipeline de GitHub Actions: la
-# recuperación ocurre localmente, en segundos, apuntando al mismo clúster.
-#
-# Uso:
-#   chmod +x scripts/watchdog-auto-rollback.sh
-#   ./scripts/watchdog-auto-rollback.sh
-#
-# Déjalo corriendo en una terminal visible durante toda la defensa.
+#!/bin/bash
 
-set -uo pipefail
+# ===================================================================
+#  WATCHDOG - Monitoreo continuo de orders-public (vía LoadBalancer)
+#  Intervalo: 3s | Umbral de fallas: 3
+# ===================================================================
 
-NAMESPACE="default"
 SERVICE="orders-public"
-INTERVAL_SECONDS=3
-MAX_FALLAS_CONSECUTIVAS=3
+NAMESPACE="default"
+THRESHOLD=3
+INTERVAL=3
+HEALTH_PATH="/health"
 
-fallas=0
-
-color_opuesto() {
-  if [ "$1" == "blue" ]; then echo "green"; else echo "blue"; fi
-}
+FAIL_COUNT=0
 
 echo "==================================================================="
-echo "  WATCHDOG - Monitoreo continuo de orders-public"
-echo "  Intervalo: ${INTERVAL_SECONDS}s | Umbral de fallas: ${MAX_FALLAS_CONSECUTIVAS}"
+echo "  WATCHDOG - Monitoreo continuo de $SERVICE"
+echo "  Intervalo: ${INTERVAL}s | Umbral de fallas: ${THRESHOLD}"
 echo "==================================================================="
+
+LB_HOST=$(kubectl get service "$SERVICE" -n "$NAMESPACE" -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+
+if [ -z "$LB_HOST" ]; then
+  echo "[ERROR] No se pudo obtener el hostname del LoadBalancer. ¿Está provisionado?"
+  exit 1
+fi
+
+URL="http://${LB_HOST}${HEALTH_PATH}"
+echo "[INFO] Monitoreando: $URL"
+echo ""
 
 while true; do
-  ACTIVE_COLOR=$(kubectl get service "$SERVICE" -n "$NAMESPACE" -o jsonpath='{.spec.selector.color}' 2>/dev/null)
+  TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
 
-  # Chequeo 1: estado de los pods de la variante activa (detecta CrashLoopBackOff, etc.)
-  POD_ESTADO=$(kubectl get pods -n "$NAMESPACE" -l app=orders,color="$ACTIVE_COLOR" \
-    -o jsonpath='{.items[*].status.containerStatuses[*].state.waiting.reason}' 2>/dev/null)
+  HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 2 "$URL")
 
-  # Chequeo 2: HTTP real vía port-forward
-  kubectl port-forward "svc/$SERVICE" 8082:80 -n "$NAMESPACE" >/tmp/watchdog-pf.log 2>&1 &
-  PF_PID=$!
-  sleep 1
-  HTTP_STATUS=$(curl -s -m 2 -o /dev/null -w "%{http_code}" http://localhost:8082/health 2>/dev/null || echo "000")
-  kill $PF_PID 2>/dev/null || true
-  wait $PF_PID 2>/dev/null
-
-  TIMESTAMP=$(date '+%H:%M:%S')
-
-  if [ "$HTTP_STATUS" == "200" ] && [ -z "$POD_ESTADO" ]; then
-    if [ "$fallas" -gt 0 ]; then
-      echo "[$TIMESTAMP] Recuperado. Variante activa: $ACTIVE_COLOR (HTTP 200)"
+  if [ "$HTTP_CODE" == "200" ]; then
+    if [ "$FAIL_COUNT" -gt 0 ]; then
+      echo "[$TIMESTAMP] OK - Recuperado (código $HTTP_CODE)"
     fi
-    fallas=0
+    FAIL_COUNT=0
   else
-    fallas=$((fallas + 1))
-    echo "[$TIMESTAMP] FALLA DETECTADA #$fallas - Variante: $ACTIVE_COLOR | HTTP: $HTTP_STATUS | Estado pods: ${POD_ESTADO:-N/A}"
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+    echo "[$TIMESTAMP] FALLA #$FAIL_COUNT - código: ${HTTP_CODE:-sin respuesta}"
+
+    if [ "$FAIL_COUNT" -ge "$THRESHOLD" ]; then
+      echo "[$TIMESTAMP] >>> UMBRAL ALCANZADO. Ejecutando rollback automático..."
+
+      CURRENT_COLOR=$(kubectl get service "$SERVICE" -n "$NAMESPACE" -o jsonpath='{.spec.selector.color}')
+
+      if [ "$CURRENT_COLOR" == "blue" ]; then
+        TARGET_COLOR="green"
+      else
+        TARGET_COLOR="blue"
+      fi
+
+      echo "[$TIMESTAMP] Color activo con falla: $CURRENT_COLOR -> Rollback a: $TARGET_COLOR"
+      kubectl patch service "$SERVICE" -n "$NAMESPACE" -p "{\"spec\":{\"selector\":{\"color\":\"${TARGET_COLOR}\"}}}"
+
+      echo "[$TIMESTAMP] Rollback ejecutado. Reiniciando contador de fallas."
+      FAIL_COUNT=0
+
+      sleep 5
+    fi
   fi
 
-  if [ "$fallas" -ge "$MAX_FALLAS_CONSECUTIVAS" ]; then
-    ANTERIOR=$(color_opuesto "$ACTIVE_COLOR")
-    echo "==================================================================="
-    echo "[$TIMESTAMP] UMBRAL SUPERADO -> Ejecutando ROLLBACK AUTOMATICO"
-    echo "  De: $ACTIVE_COLOR   Hacia: $ANTERIOR"
-    echo "==================================================================="
-
-    kubectl patch service "$SERVICE" -n "$NAMESPACE" \
-      -p "{\"spec\":{\"selector\":{\"app\":\"orders\",\"color\":\"$ANTERIOR\"}}}"
-
-    echo "[$TIMESTAMP] Rollback aplicado. Tráfico ahora en: $ANTERIOR"
-    echo "[$TIMESTAMP] Reiniciando contador de fallas y continuando monitoreo..."
-    fallas=0
-  fi
-
-  sleep "$INTERVAL_SECONDS"
+  sleep "$INTERVAL"
 done
