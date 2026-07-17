@@ -1,0 +1,25 @@
+# service-preview-template.yaml
+# Plantilla de Service interno "de previsualización": apunta SIEMPRE a una
+# variante específica (blue o green), a diferencia de orders-public que
+# apunta a la variante activa. Se usa para poder probar /health de la
+# variante nueva ANTES de moverle tráfico real (Ítem 2: "Validación de
+# Salud" antes de cambiar el tráfico al 100%).
+#
+# Se procesa con envsubst igual que deployment-template.yaml.
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: orders-preview-${COLOR}
+  namespace: ${NAMESPACE}
+  labels:
+    app: orders
+    color: ${COLOR}
+spec:
+  type: ClusterIP
+  selector:
+    app: orders
+    color: ${COLOR}
+  ports:
+    - port: 80
+      targetPort: 3000

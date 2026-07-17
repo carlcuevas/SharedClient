@@ -1,0 +1,50 @@
+# deployment-template.yaml
+# Plantilla de Deployment parametrizada. Las plantillas de GitHub Actions la
+# procesan con `envsubst` para inyectar COLOR, IMAGE y NAMESPACE de forma
+# dinámica (Ítem 1: "las plantillas deben poder inyectar variables de
+# entorno dinámicas al clúster EKS").
+#
+# No se aplica directamente con kubectl: siempre pasa por envsubst primero.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: orders-${COLOR}
+  namespace: ${NAMESPACE}
+  labels:
+    app: orders
+    color: ${COLOR}
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: orders
+      color: ${COLOR}
+  template:
+    metadata:
+      labels:
+        app: orders
+        color: ${COLOR}
+    spec:
+      containers:
+        - name: orders
+          image: ${IMAGE}
+          ports:
+            - containerPort: 3000
+          env:
+            - name: COLOR
+              value: "${COLOR}"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3

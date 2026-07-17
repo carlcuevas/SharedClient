@@ -1,0 +1,27 @@
+# service-public.yaml
+# Service público de "Orders". El campo spec.selector.color es el que
+# determina qué variante (blue o green) recibe el 100% del tráfico real.
+#
+# El pipeline lo modifica con "kubectl patch" en el job switch-traffic
+# para hacer el cutover, y lo revierte (vuelve al color anterior) en caso
+# de rollback post-corte (ver scripts/watchdog-auto-rollback.sh).
+#
+# Aplícalo UNA sola vez de forma manual antes del primer despliegue,
+# apuntando a "blue" como versión inicial estable:
+#   kubectl apply -f k8s/service-public.yaml
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: orders-public
+  namespace: default
+  labels:
+    app: orders
+spec:
+  type: LoadBalancer
+  selector:
+    app: orders
+    color: blue
+  ports:
+    - port: 80
+      targetPort: 3000
