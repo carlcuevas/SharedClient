@@ -1,0 +1,82 @@
+# Plantilla reutilizable: desplegar una variante (color) de la app en EKS.
+#
+# Aplica el manifiesto Deployment parametrizado (deployment-template.yaml)
+# inyectando dinámicamente: color (blue/green), imagen y namespace.
+# No toca el Service público: eso lo hace el job de "switch-traffic" del
+# workflow principal, después de validar salud.
+#
+# Cumple Ítem 1 (plantilla reutilizable de Deploy, variables dinámicas al
+# clúster EKS) y sienta la base del Ítem 2 (Blue-Green).
+
+name: (template) Deploy variante en EKS
+
+on:
+  workflow_call:
+    inputs:
+      color:
+        description: "Variante a desplegar: blue o green"
+        required: true
+        type: string
+      image-uri:
+        description: "URI completa de la imagen en ECR"
+        required: true
+        type: string
+      cluster-name:
+        description: "Nombre del clúster EKS"
+        required: true
+        type: string
+      aws-region:
+        description: "Región AWS"
+        required: true
+        type: string
+      namespace:
+        description: "Namespace de Kubernetes"
+        required: false
+        type: string
+        default: "default"
+
+jobs:
+  deploy:
+    name: Deploy ${{ inputs.color }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Descargar código
+        uses: actions/checkout@v4
+
+      - name: Configurar credenciales AWS (sesión temporal de AWS Academy)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ inputs.aws-region }}
+
+      - name: Configurar kubectl contra el clúster EKS
+        run: |
+          aws eks update-kubeconfig \
+            --name "${{ inputs.cluster-name }}" \
+            --region "${{ inputs.aws-region }}"
+
+      - name: Inyectar variables dinámicas y aplicar Deployment
+        env:
+          COLOR: ${{ inputs.color }}
+          IMAGE: ${{ inputs.image-uri }}
+          NAMESPACE: ${{ inputs.namespace }}
+        run: |
+          export COLOR IMAGE NAMESPACE
+          envsubst < k8s/deployment-template.yaml | kubectl apply -n "$NAMESPACE" -f -
+
+      - name: Aplicar Service de previsualización de esta variante
+        env:
+          COLOR: ${{ inputs.color }}
+          NAMESPACE: ${{ inputs.namespace }}
+        run: |
+          export COLOR NAMESPACE
+          envsubst < k8s/service-preview-template.yaml | kubectl apply -n "$NAMESPACE" -f -
+
+      - name: Esperar a que el rollout de la variante esté listo
+        env:
+          COLOR: ${{ inputs.color }}
+          NAMESPACE: ${{ inputs.namespace }}
+        run: |
+          kubectl rollout status deployment/orders-$COLOR -n "$NAMESPACE" --timeout=120s

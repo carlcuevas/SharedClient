@@ -1,0 +1,76 @@
+# Plantilla reutilizable: construir imagen Docker y publicarla en Amazon ECR.
+#
+# Esta plantilla NO se ejecuta sola: es invocada por otro workflow con
+# "uses: ./.github/workflows/templates/build-push-ecr.yml" y "with:".
+#
+# Cumple Ítem 1 del Encargo: plantilla reutilizable para la etapa de Build,
+# capaz de recibir variables dinámicas (nombre de imagen, tag, contexto).
+
+name: (template) Build y Push a ECR
+
+on:
+  workflow_call:
+    inputs:
+      ecr-repository:
+        description: "Nombre del repositorio ECR (ej. techmarket-orders)"
+        required: true
+        type: string
+      image-tag:
+        description: "Tag de la imagen (ej. sha del commit)"
+        required: true
+        type: string
+      aws-region:
+        description: "Región AWS"
+        required: true
+        type: string
+      dockerfile-context:
+        description: "Path del contexto de build"
+        required: false
+        type: string
+        default: "."
+    outputs:
+      image-uri:
+        description: "URI completa de la imagen publicada en ECR"
+        value: ${{ jobs.build-push.outputs.image-uri }}
+
+jobs:
+  build-push:
+    name: Build y Push
+    runs-on: ubuntu-latest
+    outputs:
+      image-uri: ${{ steps.build.outputs.image }}
+    steps:
+      - name: Descargar código
+        uses: actions/checkout@v4
+
+      - name: Configurar credenciales AWS (sesión temporal de AWS Academy)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ inputs.aws-region }}
+
+      - name: Login en Amazon ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Crear repositorio ECR si no existe
+        run: |
+          aws ecr describe-repositories --repository-names "${{ inputs.ecr-repository }}" \
+            --region ${{ inputs.aws-region }} 2>/dev/null || \
+          aws ecr create-repository --repository-name "${{ inputs.ecr-repository }}" \
+            --region ${{ inputs.aws-region }}
+
+      - name: Build y push de la imagen
+        id: build
+        env:
+          REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+          REPOSITORY: ${{ inputs.ecr-repository }}
+          TAG: ${{ inputs.image-tag }}
+        run: |
+          IMAGE_URI="$REGISTRY/$REPOSITORY:$TAG"
+          docker build -t "$IMAGE_URI" ${{ inputs.dockerfile-context }}
+          docker push "$IMAGE_URI"
+          echo "image=$IMAGE_URI" >> "$GITHUB_OUTPUT"
+          echo "Imagen publicada: $IMAGE_URI"
