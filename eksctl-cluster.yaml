@@ -1,0 +1,62 @@
+# eksctl-cluster.yaml
+# Configuración del clúster EKS para el caso "TechMarket Orders".
+#
+# IMPORTANTE - AWS Academy Learner Lab:
+# Academy NO permite crear roles IAM nuevos. Por eso este archivo NO deja que
+# eksctl cree roles automáticamente: apunta explícitamente al rol precreado
+# "LabRole" tanto para el control plane como para el node group.
+#
+# Antes de usar este archivo:
+# 1. Inicia tu AWS Academy Learner Lab (botón "Start Lab").
+# 2. Ve a AWS Details -> copia el Account ID (número de 12 dígitos).
+# 3. Reemplaza 995092812762 en las dos líneas "arn:aws:iam::995092812762:role/LabRole".
+# 4. Verifica que la región coincida con la que usa tu Learner Lab (normalmente us-west-2).
+
+apiVersion: eksctl.io/v1alpha5
+kind: ClusterConfig
+
+metadata:
+  name: techmarket-eks
+  region: us-west-2
+  version: "1.31"
+  tags:
+    proyecto: techmarket-orders
+    curso: AUY1104
+
+iam:
+  serviceRoleARN: arn:aws:iam::995092812762:role/LabRole
+  # No pidas a eksctl que gestione OIDC/IRSA: Academy no permite crear el
+  # proveedor de identidad OIDC ni roles asociados. Usaremos credenciales
+  # estáticas de sesión (Access Key + Secret + Session Token) como GitHub Secrets.
+  withOIDC: false
+
+managedNodeGroups:
+  - name: ng-orders
+    instanceType: t3.medium
+    desiredCapacity: 1
+    minSize: 1
+    maxSize: 3
+    volumeSize: 20
+    privateNetworking: false
+    iam:
+      instanceRoleARN: arn:aws:iam::995092812762:role/LabRole
+    labels:
+      workload: techmarket-orders
+
+# Notas de uso:
+#   Crear el clúster (tarda ~15-20 min):
+#     eksctl create cluster -f eksctl-cluster.yaml
+#
+#   Configurar kubectl para apuntar al clúster:
+#     aws eks update-kubeconfig --name techmarket-eks --region us-west-2
+#
+#   Verificar que los nodos estén Ready:
+#     kubectl get nodes
+#
+#   IMPORTANTE: si el Learner Lab se reinicia, las credenciales AWS cambian,
+#   pero el clúster EKS ya creado sigue existiendo mientras la sesión de
+#   Academy siga activa. Solo necesitas volver a exportar credenciales y
+#   volver a correr "aws eks update-kubeconfig".
+#
+#   Para eliminar todo al terminar (evitar consumo de créditos):
+#     eksctl delete cluster -f eksctl-cluster.yaml
