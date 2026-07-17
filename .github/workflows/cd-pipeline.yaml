@@ -1,0 +1,162 @@
+# cd-pipeline.yaml
+# Pipeline principal de "Operación Resiliencia en TechMarket".
+#
+# Orquesta las plantillas reutilizables (build-push-ecr.yml, deploy-eks.yml)
+# e implementa la estrategia Blue-Green con validación de salud y rollback
+# automático (Ítems 1, 2 y 3 del Encargo).
+#
+# Flujo:
+#   tests -> build (ECR) -> determinar color objetivo (blue/green) ->
+#   deploy variante objetivo (sin tocar tráfico público) ->
+#   validar salud de la variante objetivo ->
+#     si OK  -> cambiar el Service público a la variante objetivo
+#     si FAIL -> eliminar la variante objetivo (rollback pre-corte, el
+#                tráfico público nunca se movió de la versión estable)
+
+name: CD Pipeline - TechMarket Orders (Blue-Green)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  AWS_REGION: us-east-1
+  CLUSTER_NAME: techmarket-eks
+  ECR_REPOSITORY: techmarket-orders
+  NAMESPACE: default
+
+jobs:
+  tests:
+    name: Ejecutar tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: npm install
+      - run: npm test
+
+  build:
+    name: Build y Push a ECR
+    needs: tests
+    uses: ./.github/workflows/templates/build-push-ecr.yml
+    with:
+      ecr-repository: techmarket-orders
+      image-tag: ${{ github.sha }}
+      aws-region: us-east-1
+    secrets: inherit
+
+  determine-target-color:
+    name: Determinar variante objetivo (blue/green)
+    needs: build
+    runs-on: ubuntu-latest
+    outputs:
+      target-color: ${{ steps.calc.outputs.target }}
+      active-color: ${{ steps.calc.outputs.active }}
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - run: aws eks update-kubeconfig --name ${{ env.CLUSTER_NAME }} --region ${{ env.AWS_REGION }}
+      - name: Leer color activo actual del Service público
+        id: calc
+        run: |
+          ACTIVE=$(kubectl get service orders-public -n ${{ env.NAMESPACE }} \
+            -o jsonpath='{.spec.selector.color}' 2>/dev/null || echo "blue")
+          if [ "$ACTIVE" == "blue" ]; then TARGET="green"; else TARGET="blue"; fi
+          echo "active=$ACTIVE" >> "$GITHUB_OUTPUT"
+          echo "target=$TARGET" >> "$GITHUB_OUTPUT"
+          echo "Color activo actual: $ACTIVE / Nueva variante a desplegar: $TARGET"
+
+  deploy-target:
+    name: Deploy variante objetivo
+    needs: [build, determine-target-color]
+    uses: ./.github/workflows/templates/deploy-eks.yml
+    with:
+      color: ${{ needs.determine-target-color.outputs.target-color }}
+      image-uri: ${{ needs.build.outputs.image-uri }}
+      cluster-name: techmarket-eks
+      aws-region: us-east-1
+      namespace: default
+    secrets: inherit
+
+  health-validation:
+    name: "Validación de Salud"
+    needs: [determine-target-color, deploy-target]
+    runs-on: ubuntu-latest
+    outputs:
+      healthy: ${{ steps.check.outputs.healthy }}
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - run: aws eks update-kubeconfig --name ${{ env.CLUSTER_NAME }} --region ${{ env.AWS_REGION }}
+      - name: Port-forward a la variante objetivo y probar /health
+        id: check
+        env:
+          TARGET: ${{ needs.determine-target-color.outputs.target-color }}
+        run: |
+          kubectl port-forward svc/orders-preview-$TARGET 8080:80 -n ${{ env.NAMESPACE }} &
+          PF_PID=$!
+          sleep 5
+
+          HEALTHY="true"
+          for i in 1 2 3 4 5; do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/health || echo "000")
+            echo "Intento $i -> HTTP $STATUS"
+            if [ "$STATUS" != "200" ]; then
+              HEALTHY="false"
+              break
+            fi
+            sleep 2
+          done
+
+          kill $PF_PID 2>/dev/null || true
+          echo "healthy=$HEALTHY" >> "$GITHUB_OUTPUT"
+
+  switch-traffic:
+    name: Cambiar tráfico al 100% (cutover)
+    needs: [determine-target-color, health-validation]
+    if: needs.health-validation.outputs.healthy == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - run: aws eks update-kubeconfig --name ${{ env.CLUSTER_NAME }} --region ${{ env.AWS_REGION }}
+      - name: Apuntar Service público a la nueva variante
+        env:
+          TARGET: ${{ needs.determine-target-color.outputs.target-color }}
+        run: |
+          kubectl patch service orders-public -n ${{ env.NAMESPACE }} \
+            -p "{\"spec\":{\"selector\":{\"app\":\"orders\",\"color\":\"$TARGET\"}}}"
+          echo "Tráfico movido al 100% a la variante: $TARGET"
+
+  rollback-pre-cutover:
+    name: Rollback automático (falla la validación, antes del corte)
+    needs: [determine-target-color, health-validation]
+    if: needs.health-validation.outputs.healthy == 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - run: aws eks update-kubeconfig --name ${{ env.CLUSTER_NAME }} --region ${{ env.AWS_REGION }}
+      - name: Eliminar la variante objetivo defectuosa (el tráfico nunca se movió)
+        env:
+          TARGET: ${{ needs.determine-target-color.outputs.target-color }}
+        run: |
+          echo "Validación de salud falló. Revirtiendo despliegue de la variante $TARGET..."
+          kubectl delete deployment orders-$TARGET -n ${{ env.NAMESPACE }} --ignore-not-found=true
+          echo "Rollback completado. El Service público sigue sirviendo la versión estable."
