@@ -21,7 +21,7 @@ on:
   workflow_dispatch:
 
 env:
-  AWS_REGION: us-east-1
+  AWS_REGION: us-west-2
   CLUSTER_NAME: techmarket-eks
   ECR_REPOSITORY: techmarket-orders
   NAMESPACE: default
@@ -38,11 +38,11 @@ jobs:
   build:
     name: Build y Push a ECR
     needs: tests
-    uses: ./.github/workflows/templates/build-push-ecr.yml
+    uses: ./.github/workflows/build-push-ecr.yml
     with:
       ecr-repository: techmarket-orders
       image-tag: ${{ github.sha }}
-      aws-region: us-east-1
+      aws-region: us-west-2
     secrets: inherit
 
   determine-target-color:
@@ -73,12 +73,12 @@ jobs:
   deploy-target:
     name: Deploy variante objetivo
     needs: [build, determine-target-color]
-    uses: ./.github/workflows/templates/deploy-eks.yml
+    uses: ./.github/workflows/deploy-eks.yml
     with:
       color: ${{ needs.determine-target-color.outputs.target-color }}
       image-uri: ${{ needs.build.outputs.image-uri }}
       cluster-name: techmarket-eks
-      aws-region: us-east-1
+      aws-region: us-west-2
       namespace: default
     secrets: inherit
 
