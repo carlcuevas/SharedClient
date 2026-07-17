@@ -90,10 +90,15 @@ Hay dos mecanismos de remediación, para dos momentos distintos:
 
 ## 5. Citas y referencias (APA)
 
-_Pendiente completar según las fuentes que efectivamente uses (documentación
-oficial de AWS EKS, Kubernetes, GitHub Actions, etc.). Ejemplo de formato:_
+Amazon Web Services. (2025). *Amazon EKS User Guide*. AWS Documentation. https://docs.aws.amazon.com/eks/
 
-> Amazon Web Services. (2025). *Amazon EKS User Guide*. AWS Documentation. https://docs.aws.amazon.com/eks/
+Amazon Web Services. (2025). *Amazon ECR User Guide*. AWS Documentation. https://docs.aws.amazon.com/AmazonECR/latest/userguide/
+
+The Kubernetes Authors. (2025). *Services*. Kubernetes Documentation. https://kubernetes.io/docs/concepts/services-networking/service/
+
+The Kubernetes Authors. (2025). *Deployments*. Kubernetes Documentation. https://kubernetes.io/docs/concepts/workloads/controllers/deployment/
+
+GitHub, Inc. (2025). *Reusing workflows*. GitHub Docs. https://docs.github.com/en/actions/using-workflows/reusing-workflows
 
 ## 6. Declaración de uso de IA
 
